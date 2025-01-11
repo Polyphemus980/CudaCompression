@@ -1,6 +1,17 @@
 #include "run-length_kernels.cuh";
 
+#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char* file, int line)
+{
+	if (code != cudaSuccess)
+	{
+		std::string errorMessage = "GPUassert: " + std::string(cudaGetErrorString(code)) + " " + file + " " + std::to_string(line);
+		throw std::runtime_error(errorMessage);  
+	}
+}
+
 static constexpr int max_byte_value = 255;
+
 __global__ void createMask(unsigned char* inputBytes, uint32_t* mask, int n) {
 	int threadId = blockIdx.x * blockDim.x + threadIdx.x;
 	if (threadId >= n)
@@ -90,85 +101,102 @@ void calculatePosition(unsigned char* counts, uint32_t* positions, int counts_le
 	thrust::exclusive_scan(thrust::device, counts, counts + counts_length, positions);
 }
 
-__host__ void CudaRLEncoding(unsigned char* data, int length) {
-	cudaFree(0);
-	auto start = std::chrono::high_resolution_clock::now();
+__host__ RLData CudaRLEncode(std::vector<unsigned char> data) {
+	cudaFree(0); 
+
 	unsigned char* dev_data = NULL;
-	cudaMalloc((void**)&dev_data, sizeof(char) * length);
-	cudaMemcpy(dev_data, data, sizeof(char) * length, cudaMemcpyHostToDevice);
-
 	uint32_t* mask = NULL;
-	cudaMalloc((void**)&mask, sizeof(uint32_t) * length);
-
-	int threadsPerBlock = 512;
-	int numBlocksMasks = (length + threadsPerBlock - 1) / threadsPerBlock;
-	createMask << <numBlocksMasks, threadsPerBlock >> > (dev_data, mask, length);
-
-	uint32_t* host_mask = (uint32_t*)malloc(sizeof(uint32_t) * length);
-	cudaMemcpy(host_mask, mask, sizeof(uint32_t) * length, cudaMemcpyDeviceToHost);
-
 	uint32_t* scanned_mask = NULL;
-	cudaMalloc((void**)&scanned_mask, sizeof(uint32_t) * length);
-
-	scanMask(mask, scanned_mask, length);
-	uint32_t* host_scanned_mask = (uint32_t*)malloc(sizeof(uint32_t) * length);
-	cudaMemcpy(host_scanned_mask, scanned_mask, sizeof(uint32_t) * length, cudaMemcpyDeviceToHost);
-
 	uint32_t* compacted_mask = NULL;
-	cudaMalloc((void**)&compacted_mask, sizeof(uint32_t) * length);
-
 	int* compacted_length = NULL;
-	cudaMalloc((void**)&compacted_length, sizeof(int));
-
-	compactMask << <numBlocksMasks, threadsPerBlock >> > (scanned_mask, compacted_mask, compacted_length, length);
-
-	uint32_t* host_compacted_mask = (uint32_t*)malloc(sizeof(uint32_t) * length);
-	cudaMemcpy(host_compacted_mask, compacted_mask, sizeof(uint32_t) * length, cudaMemcpyDeviceToHost);
-
-	int* host_compacted_length = (int*) malloc(sizeof(int));
-	cudaMemcpy(host_compacted_length, compacted_length, sizeof(int), cudaMemcpyDeviceToHost);
-	
-	int numBlocksChunks = (*host_compacted_length + threadsPerBlock - 1) / threadsPerBlock;
 	uint32_t* chunks = NULL;
-	cudaMalloc((void**)&chunks, sizeof(uint32_t) * *host_compacted_length);
-	calculateChunks <<<numBlocksChunks, threadsPerBlock >> > (compacted_mask, chunks, compacted_length);
-
-	uint32_t* host_chunks = (uint32_t*)malloc(sizeof(uint32_t) * (*host_compacted_length));
-	cudaMemcpy(host_chunks, chunks, sizeof(uint32_t) * (*host_compacted_length), cudaMemcpyDeviceToHost);
-
 	uint32_t* positions = NULL;
-	cudaMalloc((void**)&positions, sizeof(uint32_t)* *host_compacted_length);
-	calculatePosition(chunks, positions, *host_compacted_length);
-
-	uint32_t* host_positions = (uint32_t*)malloc(sizeof(uint32_t) * (*host_compacted_length));
-	cudaMemcpy(host_positions, positions, sizeof(uint32_t) * (*host_compacted_length), cudaMemcpyDeviceToHost);
-
-	uint32_t outputLength = thrust::reduce(thrust::device, chunks, chunks + *host_compacted_length, 0);
-
 	unsigned char* outputBytes = NULL;
-	cudaMalloc((void**)&outputBytes, sizeof(unsigned char) * outputLength);
-
 	unsigned char* outputCounts = NULL;
-	cudaMalloc((void**)&outputCounts, sizeof(unsigned char) * outputLength);
+	int* host_compacted_length = NULL;
 
-	finalEncoding<<<numBlocksChunks,threadsPerBlock>>>(compacted_mask, positions, compacted_length, dev_data, outputBytes, outputCounts);
-	
-	unsigned char* hostOutputBytes = (unsigned char*)malloc(sizeof(unsigned char) * outputLength);
-	cudaMemcpy(hostOutputBytes, outputBytes,sizeof(unsigned char) * outputLength, cudaMemcpyDeviceToHost);
+	auto start = std::chrono::high_resolution_clock::now();
+	try {
+		size_t length = data.size();
+
+		gpuErrchk(cudaMalloc((void**)&dev_data, sizeof(char) * length));
+		gpuErrchk(cudaMemcpy(dev_data, data.data(), sizeof(char) * length, cudaMemcpyHostToDevice));
+
+		gpuErrchk(cudaMalloc((void**)&mask, sizeof(uint32_t) * length));
+		int threadsPerBlock = 512;
+		int numBlocksMasks = (length + threadsPerBlock - 1) / threadsPerBlock;
+		createMask << <numBlocksMasks, threadsPerBlock >> > (dev_data, mask, length);
 
 
-	unsigned char* hostOutputCounts = (unsigned char*)malloc(sizeof(unsigned char) * outputLength);
-	cudaMemcpy(hostOutputCounts, outputCounts, sizeof(unsigned char) * outputLength, cudaMemcpyDeviceToHost);
+		gpuErrchk(cudaMalloc((void**)&scanned_mask, sizeof(uint32_t) * length));
+		scanMask(mask, scanned_mask, length);
 
-	auto end = std::chrono::high_resolution_clock::now();
+		gpuErrchk(cudaMalloc((void**)&compacted_mask, sizeof(uint32_t) * length));
+		gpuErrchk(cudaMalloc((void**)&compacted_length, sizeof(int)));
 
-	auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-	std::cout << "GPU Total time: " << duration.count() << " ms" << std::endl;
-	//std::cout << "Bytes" << "\t" << "Counts" << "\n";
-	/*for (uint32_t i = 0; i < outputLength; i++) {
-		printf("%x \t", hostOutputBytes[i]);
-		printf("%x \n", hostOutputCounts[i]);
-	}*/
+		compactMask << <numBlocksMasks, threadsPerBlock >> > (scanned_mask, compacted_mask, compacted_length, length);
+
+		host_compacted_length = (int*)malloc(sizeof(int));
+		gpuErrchk(cudaMemcpy(host_compacted_length, compacted_length, sizeof(int), cudaMemcpyDeviceToHost));
+
+		int numBlocksChunks = (*host_compacted_length + threadsPerBlock - 1) / threadsPerBlock;
+		gpuErrchk(cudaMalloc((void**)&chunks, sizeof(uint32_t) * *host_compacted_length));
+		calculateChunks << <numBlocksChunks, threadsPerBlock >> > (compacted_mask, chunks, compacted_length);
+
+		gpuErrchk(cudaMalloc((void**)&positions, sizeof(uint32_t) * *host_compacted_length));
+		calculatePosition(chunks, positions, *host_compacted_length);
+
+		uint32_t outputLength = thrust::reduce(thrust::device, chunks, chunks + *host_compacted_length, 0);
+
+		gpuErrchk(cudaMalloc((void**)&outputBytes, sizeof(unsigned char) * outputLength));
+		gpuErrchk(cudaMalloc((void**)&outputCounts, sizeof(unsigned char) * outputLength));
+
+		finalEncoding << <numBlocksChunks, threadsPerBlock >> > (compacted_mask, positions, compacted_length, dev_data, outputBytes, outputCounts);
+
+		std::vector<unsigned char> hostOutputBytes(outputLength);
+		gpuErrchk(cudaMemcpy(hostOutputBytes.data(), outputBytes, sizeof(unsigned char) * outputLength, cudaMemcpyDeviceToHost));
+
+		std::vector<unsigned char> hostOutputCounts(outputLength);
+		gpuErrchk(cudaMemcpy(hostOutputCounts.data(), outputCounts, sizeof(unsigned char) * outputLength, cudaMemcpyDeviceToHost));
+
+		auto end = std::chrono::high_resolution_clock::now();
+		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+		std::cout << "GPU Total time: " << duration.count() << " ms" << std::endl;
+
+		RLData encodedData;
+		encodedData.counts = hostOutputCounts;
+		encodedData.values = hostOutputBytes;
+		encodedData.length = data.size();
+		
+		free(host_compacted_length);
+		gpuErrchk(cudaFree(dev_data));
+		gpuErrchk(cudaFree(mask));
+		gpuErrchk(cudaFree(scanned_mask));
+		gpuErrchk(cudaFree(compacted_mask));
+		gpuErrchk(cudaFree(compacted_length));
+		gpuErrchk(cudaFree(chunks));
+		gpuErrchk(cudaFree(positions));
+		gpuErrchk(cudaFree(outputBytes));
+		gpuErrchk(cudaFree(outputCounts));
+
+		return encodedData;
+	}
+	catch (const std::runtime_error& e)
+	{
+		std::cerr << "Error: " << e.what() << std::endl;
+
+		if (dev_data) gpuErrchk(cudaFree(dev_data));
+		if (mask) gpuErrchk(cudaFree(mask));
+		if (scanned_mask) gpuErrchk(cudaFree(scanned_mask));
+		if (compacted_mask) gpuErrchk(cudaFree(compacted_mask));
+		if (compacted_length) gpuErrchk(cudaFree(compacted_length));
+		if (chunks) gpuErrchk(cudaFree(chunks));
+		if (positions) gpuErrchk(cudaFree(positions));
+		if (outputBytes) gpuErrchk(cudaFree(outputBytes));
+		if (outputCounts) gpuErrchk(cudaFree(outputCounts));
+		if (host_compacted_length) free(host_compacted_length);
+		return RLData();
+	}
 }
 
 __global__ void finalDecoding(unsigned char* encodedValues, uint32_t* positions,int encodedLength, unsigned char* decoded,int decodedLength) {
@@ -195,33 +223,59 @@ __global__ void finalDecoding(unsigned char* encodedValues, uint32_t* positions,
 		}
 	}
 }
-__host__ void CudaRLDecoding(unsigned char* encodedValues, unsigned char* encodedCounts, int encodedLength, unsigned char** decoded,int* decodedLength)
-{
+__host__ std::vector<unsigned char> CudaRLDecode(RLData decodingData)
+{	
+	cudaFree(0);
 	unsigned char* dev_encodedValues = NULL;
-	cudaMalloc((void**)&dev_encodedValues, sizeof(char) * encodedLength);
-	cudaMemcpy(dev_encodedValues, encodedValues, sizeof(char) * encodedLength, cudaMemcpyHostToDevice);
-
 	unsigned char* dev_encodedCounts = NULL;
-	cudaMalloc((void**)&dev_encodedCounts, sizeof(char) * encodedLength);
-	cudaMemcpy(dev_encodedCounts, encodedCounts, sizeof(char) * encodedLength, cudaMemcpyHostToDevice);
-
 	uint32_t* positions = NULL;
-	cudaMalloc((void**)&positions, sizeof(unsigned char) * encodedLength);
-	calculatePosition(dev_encodedCounts, positions, encodedLength);
-
-	*decodedLength = thrust::reduce(thrust::device, dev_encodedCounts, dev_encodedCounts + encodedLength);
-
 	unsigned char* dev_decoded = NULL;
-	cudaMalloc((void**)&dev_decoded, sizeof(char) * *decodedLength);
 
-	int threadsPerBlock = 512;
-	int numBlocks = (*decodedLength + threadsPerBlock - 1) / threadsPerBlock;
+	auto start = std::chrono::high_resolution_clock::now();
+	try
+	{
+		uint64_t encodedLength = decodingData.counts.size();
 
-	finalDecoding<<<numBlocks,threadsPerBlock>>>(dev_encodedValues, positions, encodedLength, dev_decoded, *decodedLength);
+		gpuErrchk(cudaMalloc((void**)&dev_encodedValues, sizeof(char) * encodedLength));
+		gpuErrchk(cudaMemcpy(dev_encodedValues, decodingData.values.data(), sizeof(char) * encodedLength, cudaMemcpyHostToDevice));
 
-	*decoded = (unsigned char*) malloc(sizeof(unsigned char) * *decodedLength);
-	cudaMemcpy(*decoded, dev_decoded, sizeof(char) * *decodedLength, cudaMemcpyDeviceToHost);
-	for (int i = 0; i < *decodedLength; i++) {
-		printf("%d \n",(*decoded)[i]);
+		gpuErrchk(cudaMalloc((void**)&dev_encodedCounts, sizeof(char) * encodedLength));
+		gpuErrchk(cudaMemcpy(dev_encodedCounts, decodingData.counts.data(), sizeof(char) * encodedLength, cudaMemcpyHostToDevice));
+
+		gpuErrchk(cudaMalloc((void**)&positions, sizeof(unsigned char) * encodedLength));
+		calculatePosition(dev_encodedCounts, positions, encodedLength);
+
+		gpuErrchk(cudaMalloc((void**)&dev_decoded, sizeof(char) * decodingData.length));
+
+		int threadsPerBlock = 512;
+		int numBlocks = (decodingData.length + threadsPerBlock - 1) / threadsPerBlock;
+
+		finalDecoding << <numBlocks, threadsPerBlock >> > (dev_encodedValues, positions, encodedLength, dev_decoded, decodingData.length);
+		gpuErrchk(cudaGetLastError()); 
+
+		std::vector<unsigned char> decoded(decodingData.length);
+		gpuErrchk(cudaMemcpy(decoded.data(), dev_decoded, sizeof(char) * decodingData.length, cudaMemcpyDeviceToHost));
+
+		gpuErrchk(cudaFree(dev_encodedValues));
+		gpuErrchk(cudaFree(dev_encodedCounts));
+		gpuErrchk(cudaFree(positions));
+		gpuErrchk(cudaFree(dev_decoded));
+
+		auto end = std::chrono::high_resolution_clock::now();
+		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+		std::cout << "GPU Total time: " << duration.count() << " ms" << std::endl;
+
+		return decoded;
+	}
+	catch (const std::runtime_error& e)
+	{
+		std::cerr << "Error: " << e.what() << std::endl;
+
+		if (dev_encodedValues) gpuErrchk(cudaFree(dev_encodedValues));
+		if (dev_encodedCounts) gpuErrchk(cudaFree(dev_encodedCounts));
+		if (positions) gpuErrchk(cudaFree(positions));
+		if (dev_decoded) gpuErrchk(cudaFree(dev_decoded));
+
+		return {};
 	}
 }

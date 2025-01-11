@@ -13,6 +13,7 @@
   <PropertyGroup Label="Globals">
     <ProjectGuid>{0EC2446D-D062-4964-AFB0-BCBA3EF49DF7}</ProjectGuid>
     <RootNamespace>CudaCompression</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
@@ -64,6 +65,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>WIN32;WIN64;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -82,8 +84,12 @@
     <CudaCompile Include="run-length_kernels.cu" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="fixed-length_cpu.h" />
     <ClInclude Include="fixed-length_kernels.cuh" />
     <ClInclude Include="run-length_kernels.cuh" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="fixed-length_cpu.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
