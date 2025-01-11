@@ -62,7 +62,91 @@ CompressArguments readArguments(int argc, char** argv) {
     return args;
 }
 
+FLData readFLCompressedFile(std::string filePath) {
+    FILE* file = fopen(filePath.c_str(), "rb");
+    if (!file) {
+        std::cerr << "Failed to open file: " << filePath << std::endl;
+        return FLData();
+    }
 
+    FLData compressedData;
+
+    if (fread(&(compressedData.valuesLength), sizeof(uint64_t), 1, file) != 1) {
+        std::cerr << "Failed to read values length from file: " << filePath << std::endl;
+        fclose(file);
+        return FLData();
+    }
+
+    compressedData.encodedValues.resize(compressedData.valuesLength);
+    if (fread(compressedData.encodedValues.data(), sizeof(uint32_t), compressedData.valuesLength, file) != compressedData.valuesLength) {
+        std::cerr << "Failed to read encoded values from file: " << filePath << std::endl;
+        fclose(file);
+        return FLData();
+    }
+
+    if (fread(&(compressedData.bitsLength), sizeof(uint64_t), 1, file) != 1) {
+        std::cerr << "Failed to read frame bits length from file: " << filePath << std::endl;
+        fclose(file);
+        return FLData();
+    }
+
+    compressedData.frameBits.resize(compressedData.bitsLength);
+    if (fread(compressedData.frameBits.data(), sizeof(char), compressedData.bitsLength, file) != compressedData.bitsLength) {
+        std::cerr << "Failed to read frame bits from file: " << filePath << std::endl;
+        fclose(file);
+        return FLData();
+    }
+
+    if (fread(&(compressedData.decodedDataLength), sizeof(uint64_t), 1, file) != 1) {
+        std::cerr << "Failed to read decoded data length from file: " << filePath << std::endl;
+        fclose(file);
+        return FLData();
+    }
+
+    fclose(file);
+    return compressedData;
+}
+
+bool writeFLCompressedFile(std::string filePath, FLData compressedData) {
+    FILE* file = fopen(filePath.c_str(), "wb");
+    if (!file) {
+        std::cerr << "Failed to open file: " << filePath << std::endl;
+        return false;
+    }
+
+    if (fwrite(&(compressedData.valuesLength), sizeof(uint64_t), 1, file) != 1) {
+        std::cerr << "Failed to write values length to file: " << filePath << std::endl;
+        fclose(file);
+        return false;
+    }
+
+    if (fwrite(compressedData.encodedValues.data(), sizeof(uint32_t), compressedData.valuesLength, file) != compressedData.valuesLength) {
+        std::cerr << "Failed to write encoded values to file: " << filePath << std::endl;
+        fclose(file);
+        return false;
+    }
+
+    if (fwrite(&(compressedData.bitsLength), sizeof(uint64_t), 1, file) != 1) {
+        std::cerr << "Failed to write frame bits length to file: " << filePath << std::endl;
+        fclose(file);
+        return false;
+    } 
+
+    if (fwrite(compressedData.frameBits.data(), sizeof(char), compressedData.bitsLength, file) != compressedData.bitsLength) {
+        std::cerr << "Failed to write frame bits to file: " << filePath << std::endl;
+        fclose(file);
+        return false;
+    }
+
+    if (fwrite(&(compressedData.decodedDataLength), sizeof(uint64_t), 1, file) != 1) {
+        std::cerr << "Failed to write decoded data length to file: " << filePath << std::endl;
+        fclose(file);
+        return false;
+    }
+
+    fclose(file);
+    return true;
+}
 RLData readRLCompressedFile(std::string filePath) {
     FILE* file = fopen(filePath.c_str(), "rb");
     if (!file) {
@@ -71,28 +155,37 @@ RLData readRLCompressedFile(std::string filePath) {
     }
     
     RLData compressionData;
-    if (fread(&compressionData.length, sizeof(uint64_t), 1, file) != 1) 
+    if (fread(&compressionData.tablesLength, sizeof(uint64_t), 1, file) != 1) 
     {
-        std::cerr << "Failed to read length from file: " << filePath << std::endl;
+        std::cerr << "Failed to read tables length from file: " << filePath << std::endl;
         fclose(file);
         return RLData();
     }
 
-    compressionData.values.resize(compressionData.length);
-    compressionData.counts.resize(compressionData.length);
+    compressionData.values.resize(compressionData.tablesLength);
+    compressionData.counts.resize(compressionData.tablesLength);
 
-    if (fread(compressionData.counts.data(), sizeof(char), compressionData.length, file) != compressionData.length)
+    if (fread(compressionData.counts.data(), sizeof(char), compressionData.tablesLength, file) != compressionData.tablesLength)
     {
         std::cerr << "Failed to read counts from file: " << filePath << std::endl;
         fclose(file);
         return RLData();
     }
-    if (fread(compressionData.values.data(), sizeof(char), compressionData.length, file) != compressionData.length)
+
+    if (fread(compressionData.values.data(), sizeof(char), compressionData.tablesLength, file) != compressionData.tablesLength)
     {
         std::cerr << "Failed to read values from file: " << filePath << std::endl;
         fclose(file);
         return RLData();
     }
+
+    if (fread(&compressionData.decodedDataLength, sizeof(uint64_t), 1, file) != 1)
+    {
+        std::cerr << "Failed to read decoded data length from file: " << filePath << std::endl;
+        fclose(file);
+        return RLData();
+    }
+
     fclose(file);
 
     return compressionData;
@@ -105,20 +198,26 @@ bool writeRLCompressedFile(std::string filePath, RLData compressedData) {
         return false;
     }
 
-    if (fwrite(&(compressedData.length), sizeof(uint64_t), 1, file) != 1) {
-        std::cerr << "Failed to write length to file: " << filePath << std::endl;
+    if (fwrite(&(compressedData.tablesLength), sizeof(uint64_t), 1, file) != 1) {
+        std::cerr << "Failed to write tables length to file: " << filePath << std::endl;
         fclose(file);
         return false;
     }
 
-    if (fwrite(compressedData.counts.data(), sizeof(char), compressedData.length, file) != compressedData.length) {
+    if (fwrite(compressedData.counts.data(), sizeof(char), compressedData.tablesLength, file) != compressedData.tablesLength) {
         std::cerr << "Failed to write counts to file: " << filePath << std::endl;
         fclose(file);
         return false;
     }
 
-    if (fwrite(compressedData.values.data(), sizeof(char), compressedData.length, file) != compressedData.length) {
+    if (fwrite(compressedData.values.data(), sizeof(char), compressedData.tablesLength, file) != compressedData.tablesLength) {
         std::cerr << "Failed to write values to file: " << filePath << std::endl;
+        fclose(file);
+        return false;
+    }
+
+    if (fwrite(&(compressedData.decodedDataLength), sizeof(uint64_t), 1, file) != 1) {
+        std::cerr << "Failed to write decoded data length to file: " << filePath << std::endl;
         fclose(file);
         return false;
     }
@@ -190,7 +289,7 @@ bool CompressFile(CompressArguments args)
     if (args.method == CompressArguments::RunLength)
     {
         RLData data = CudaRLEncode(fileBytes);
-        if (data.length == 0)
+        if (data.decodedDataLength == 0)
             return false;
         return writeRLCompressedFile(args.outputPath, data);
     }
@@ -203,7 +302,7 @@ bool DecompressFile(CompressArguments args) {
     if (args.method == CompressArguments::RunLength)
     {
         RLData encodedData = readRLCompressedFile(args.inputPath);
-        if (encodedData.length == 0)
+        if (encodedData.decodedDataLength == 0)
             return false;
         std::vector<unsigned char> decodedData = CudaRLDecode(encodedData);
         if (decodedData.size() == 0)

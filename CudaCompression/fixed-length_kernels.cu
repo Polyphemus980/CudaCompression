@@ -159,7 +159,7 @@ __global__ void Decode(uint32_t* encodedData, int encodedLength, uint32_t* frame
 
 }
 
-__host__ void CudaFLDecoding(uint32_t* encodedData,int encodedLength, uint32_t* frameBits,int frameBitsLength, uint64_t decodedDataLength,unsigned char* originalData) {
+__host__ void CudaFLDecoding(uint32_t* encodedData,int encodedLength, uint32_t* frameBits,int frameBitsLength, uint64_t decodedDataLength) {
 	uint32_t* dev_encodedData = NULL;
 	cudaMalloc((void**)&dev_encodedData, sizeof(uint32_t) * encodedLength);
 	cudaMemcpy(dev_encodedData,encodedData, sizeof(uint32_t) * encodedLength, cudaMemcpyHostToDevice);
@@ -188,12 +188,4 @@ __host__ void CudaFLDecoding(uint32_t* encodedData,int encodedLength, uint32_t* 
 	cudaDeviceSynchronize();
 	unsigned char* host_decoded = (unsigned char*)malloc(sizeof(char) * decodedDataLength);
 	cudaMemcpy(host_decoded, dev_decoded, sizeof(char) * decodedDataLength, cudaMemcpyDeviceToHost);
-	
-	printf("Here");
-	for (int i = 0; i < decodedDataLength; i++) {
-		if (host_decoded[i] != originalData[i])
-		{
-				printf("%d \n", i);
-		}
-	}
 }

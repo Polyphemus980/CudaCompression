@@ -166,7 +166,8 @@ __host__ RLData CudaRLEncode(std::vector<unsigned char> data) {
 		RLData encodedData;
 		encodedData.counts = hostOutputCounts;
 		encodedData.values = hostOutputBytes;
-		encodedData.length = data.size();
+		encodedData.tablesLength = outputLength;
+		encodedData.decodedDataLength = data.size();
 		
 		free(host_compacted_length);
 		gpuErrchk(cudaFree(dev_data));
@@ -234,7 +235,7 @@ __host__ std::vector<unsigned char> CudaRLDecode(RLData decodingData)
 	auto start = std::chrono::high_resolution_clock::now();
 	try
 	{
-		uint64_t encodedLength = decodingData.counts.size();
+		uint64_t encodedLength = decodingData.tablesLength;
 
 		gpuErrchk(cudaMalloc((void**)&dev_encodedValues, sizeof(char) * encodedLength));
 		gpuErrchk(cudaMemcpy(dev_encodedValues, decodingData.values.data(), sizeof(char) * encodedLength, cudaMemcpyHostToDevice));
@@ -245,16 +246,16 @@ __host__ std::vector<unsigned char> CudaRLDecode(RLData decodingData)
 		gpuErrchk(cudaMalloc((void**)&positions, sizeof(unsigned char) * encodedLength));
 		calculatePosition(dev_encodedCounts, positions, encodedLength);
 
-		gpuErrchk(cudaMalloc((void**)&dev_decoded, sizeof(char) * decodingData.length));
+		gpuErrchk(cudaMalloc((void**)&dev_decoded, sizeof(char) * decodingData.decodedDataLength));
 
 		int threadsPerBlock = 512;
-		int numBlocks = (decodingData.length + threadsPerBlock - 1) / threadsPerBlock;
+		int numBlocks = (decodingData.decodedDataLength + threadsPerBlock - 1) / threadsPerBlock;
 
-		finalDecoding << <numBlocks, threadsPerBlock >> > (dev_encodedValues, positions, encodedLength, dev_decoded, decodingData.length);
+		finalDecoding << <numBlocks, threadsPerBlock >> > (dev_encodedValues, positions, encodedLength, dev_decoded, decodingData.decodedDataLength);
 		gpuErrchk(cudaGetLastError()); 
 
-		std::vector<unsigned char> decoded(decodingData.length);
-		gpuErrchk(cudaMemcpy(decoded.data(), dev_decoded, sizeof(char) * decodingData.length, cudaMemcpyDeviceToHost));
+		std::vector<unsigned char> decoded(decodingData.decodedDataLength);
+		gpuErrchk(cudaMemcpy(decoded.data(), dev_decoded, sizeof(char) * decodingData.decodedDataLength, cudaMemcpyDeviceToHost));
 
 		gpuErrchk(cudaFree(dev_encodedValues));
 		gpuErrchk(cudaFree(dev_encodedCounts));

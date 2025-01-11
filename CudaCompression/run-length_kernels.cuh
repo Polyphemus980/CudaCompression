@@ -16,7 +16,8 @@
 struct RLData {
 	std::vector<unsigned char> values;
 	std::vector<unsigned char> counts;
-	uint64_t length;
+	uint64_t tablesLength;
+	uint64_t decodedDataLength;
 };
 __host__ RLData CudaRLEncode(std::vector<unsigned char> data);
 
