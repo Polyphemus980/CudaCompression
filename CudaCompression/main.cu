@@ -294,7 +294,12 @@ bool CompressFile(CompressArguments args)
         return writeRLCompressedFile(args.outputPath, data);
     }
     else {
-        return false;
+        FLData data = CudaFLEncode(fileBytes);
+        if (data.decodedDataLength == 0)
+        {
+            return false;
+        }
+        return writeFLCompressedFile(args.outputPath, data);
     }
 }
 
@@ -310,7 +315,13 @@ bool DecompressFile(CompressArguments args) {
         return writeDecompressedFile(args.outputPath, decodedData);
     }
     else {
-        return false;
+        FLData encodedData = readFLCompressedFile(args.inputPath);
+        if (encodedData.decodedDataLength == 0)
+            return false;
+        std::vector<unsigned char> decodedData = CudaFLDecode(encodedData);
+        if (decodedData.size() == 0)
+            return false;
+        return writeDecompressedFile(args.outputPath, decodedData);
     }
 }
 int main(int argc,char** argv)

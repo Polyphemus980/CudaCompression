@@ -85,7 +85,7 @@ __global__ void fillOutput(unsigned char* data, int length, uint32_t* frameBits,
 
 }
 
-int calculateOutputSize(const int* framePositions, int numFrames, uint32_t* frameBits,uint64_t dataLength) {
+int calculateOutputSize(const int* framePositions, int numFrames, std::vector<uint32_t> frameBits,uint64_t dataLength) {
 	int lastFrameStart = framePositions[numFrames - 1];
 	int lastFrameBitLength = frameBits[numFrames - 1];
 	int lastFrameDataCount = dataLength % FRAME_LENGTH == 0 ? FRAME_LENGTH : dataLength % FRAME_LENGTH;
@@ -93,12 +93,24 @@ int calculateOutputSize(const int* framePositions, int numFrames, uint32_t* fram
 	return (lastBitPosition + 31) / 32;
 }
 
-__host__ uint32_t* CudaFLEncoding(unsigned char* data, uint64_t length) {
-	if (length == 0)
-		return NULL;
+std::vector<unsigned char> convertToUnsignedChar(std::vector<uint32_t>& input) {
+	std::vector<unsigned char> output;
+	output.reserve(input.size());
+
+	for (uint32_t value : input) {
+		assert(value < 256 && "Value exceeds unsigned char range!");
+		output.push_back(static_cast<unsigned char>(value));
+	}
+
+	return output;
+}
+
+__host__ FLData CudaFLEncode(std::vector<unsigned char> data) {
 	unsigned char* dev_data = NULL;
+	uint64_t length = data.size();
+
 	cudaMalloc((void**)&dev_data, sizeof(char) * length);
-	cudaMemcpy(dev_data, data, sizeof(char) * length, cudaMemcpyHostToDevice);
+	cudaMemcpy(dev_data, data.data(), sizeof(char) * length, cudaMemcpyHostToDevice);
 
 	int numBlocks = (length + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 	int numFrames = (length + FRAME_LENGTH - 1) / FRAME_LENGTH;
@@ -108,8 +120,8 @@ __host__ uint32_t* CudaFLEncoding(unsigned char* data, uint64_t length) {
 
 	calculateFrameBits << <numBlocks, THREADS_PER_BLOCK >> > (dev_data, length, dev_frameBits);
 
-	uint32_t* host_frameBits = (uint32_t*)malloc(sizeof(uint32_t) * numFrames);
-	cudaMemcpy(host_frameBits, dev_frameBits, sizeof(uint32_t) * numFrames, cudaMemcpyDeviceToHost);
+	std::vector<uint32_t> host_frameBits(numFrames);
+	cudaMemcpy(host_frameBits.data(), dev_frameBits, sizeof(uint32_t) * numFrames, cudaMemcpyDeviceToHost);
 
 	int* dev_framePositions = NULL;
 	cudaMalloc((void**)&dev_framePositions, sizeof(int) * numFrames);
@@ -127,12 +139,21 @@ __host__ uint32_t* CudaFLEncoding(unsigned char* data, uint64_t length) {
 
 	fillOutput << <numBlocks, THREADS_PER_BLOCK >> > (dev_data, length, dev_frameBits, dev_output, dev_framePositions);
 
-	uint32_t* encodedData = (uint32_t*)malloc(sizeof(uint32_t) * outputLength);
-	cudaMemcpy(encodedData, dev_output, sizeof(uint32_t) * outputLength, cudaMemcpyDeviceToHost);
+	std::vector<uint32_t> output(outputLength);
+	cudaMemcpy(output.data(), dev_output, sizeof(uint32_t) * outputLength, cudaMemcpyDeviceToHost);
+
+	FLData encodedData;
+
+	encodedData.encodedValues = output;
+	encodedData.frameBits = convertToUnsignedChar(host_frameBits);
+	encodedData.valuesLength = encodedData.encodedValues.size();
+	encodedData.bitsLength = encodedData.frameBits.size();
+	encodedData.decodedDataLength = data.size();
+
 	return encodedData;
 }
 
-__global__ void Decode(uint32_t* encodedData, int encodedLength, uint32_t* frameBits, uint64_t decodedDataLength,unsigned char* decoded, uint32_t* framePositions)
+__global__ void Decode(uint32_t* encodedData, int encodedLength, unsigned char* frameBits, uint64_t decodedDataLength,unsigned char* decoded, uint32_t* framePositions)
 {
 	int threadId = blockIdx.x * blockDim.x + threadIdx.x;
 	if (threadId >= decodedDataLength)
@@ -148,25 +169,33 @@ __global__ void Decode(uint32_t* encodedData, int encodedLength, uint32_t* frame
 
 	int bitOffset = startPos % 32;
 
-	unsigned char data = (encodedData[outputIndex] >> bitOffset) & ((1u << bitsPerSymbol) - 1);
+	unsigned char data = (encodedData[outputIndex] >> bitOffset);
+
 	if (bitOffset + bitsPerSymbol > 32)
 	{
 		int spilledBits = bitOffset + bitsPerSymbol - 32;
-		data <<= spilledBits;
-		data |= encodedData[outputIndex + 1] & ((1u << spilledBits) - 1);
+		unsigned char spilledData = (encodedData[outputIndex + 1] & ((1u << spilledBits) - 1)) << (32 - bitOffset);
+		data |= spilledData;
 	}
+
+	data &= ((1u << bitsPerSymbol) - 1);
 	decoded[threadId] = data;
 
 }
 
-__host__ void CudaFLDecoding(uint32_t* encodedData,int encodedLength, uint32_t* frameBits,int frameBitsLength, uint64_t decodedDataLength) {
+__host__ std::vector<unsigned char> CudaFLDecode(FLData decodingData) {
+
+	uint64_t encodedLength = decodingData.valuesLength;
+	uint64_t frameBitsLength = decodingData.bitsLength;
+	uint64_t decodedDataLength = decodingData.decodedDataLength;
+
 	uint32_t* dev_encodedData = NULL;
 	cudaMalloc((void**)&dev_encodedData, sizeof(uint32_t) * encodedLength);
-	cudaMemcpy(dev_encodedData,encodedData, sizeof(uint32_t) * encodedLength, cudaMemcpyHostToDevice);
+	cudaMemcpy(dev_encodedData,decodingData.encodedValues.data(), sizeof(uint32_t) * encodedLength, cudaMemcpyHostToDevice);
 	
-	uint32_t* dev_frameBits = NULL;
-	cudaMalloc((void**)&dev_frameBits, sizeof(uint32_t) * frameBitsLength);
-	cudaMemcpy(dev_frameBits,frameBits, sizeof(uint32_t) * frameBitsLength, cudaMemcpyHostToDevice);
+	unsigned char* dev_frameBits = NULL;
+	cudaMalloc((void**)&dev_frameBits, sizeof(unsigned char) * frameBitsLength);
+	cudaMemcpy(dev_frameBits,decodingData.frameBits.data(), sizeof(unsigned char) * frameBitsLength, cudaMemcpyHostToDevice);
 
 	uint32_t* dev_framePositions = NULL;
 	cudaMalloc((void**)&dev_framePositions, sizeof(int) * frameBitsLength);
@@ -175,7 +204,7 @@ __host__ void CudaFLDecoding(uint32_t* encodedData,int encodedLength, uint32_t* 
 	int sum = 0;
 	for (int i = 0; i < frameBitsLength; i++) {
 		framePositions[i] = sum;
-		sum += frameBits[i] * FRAME_LENGTH;
+		sum += decodingData.frameBits[i] * FRAME_LENGTH;
 	}
 
 	cudaMemcpy(dev_framePositions, framePositions, sizeof(uint32_t) * frameBitsLength, cudaMemcpyHostToDevice);
@@ -186,6 +215,9 @@ __host__ void CudaFLDecoding(uint32_t* encodedData,int encodedLength, uint32_t* 
 	cudaDeviceSynchronize();
 	Decode<<<numBlocks, THREADS_PER_BLOCK >>>(dev_encodedData, encodedLength, dev_frameBits, decodedDataLength, dev_decoded, dev_framePositions);
 	cudaDeviceSynchronize();
-	unsigned char* host_decoded = (unsigned char*)malloc(sizeof(char) * decodedDataLength);
-	cudaMemcpy(host_decoded, dev_decoded, sizeof(char) * decodedDataLength, cudaMemcpyDeviceToHost);
+	
+	std::vector<unsigned char> host_decoded(decodedDataLength);
+	cudaMemcpy(host_decoded.data(), dev_decoded, sizeof(char) * decodedDataLength, cudaMemcpyDeviceToHost);
+	
+	return host_decoded;
 }
