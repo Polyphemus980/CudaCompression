@@ -6,13 +6,11 @@ static constexpr int THREADS_PER_BLOCK = 1024;
 static constexpr int FRAMES_PER_BLOCK = THREADS_PER_BLOCK / FRAME_LENGTH;
 
 struct multiply_and_add {
-	const uint32_t multiplier; 
+	uint32_t multiplier;
+	multiply_and_add(uint32_t multiplier) : multiplier(multiplier) {}
 
-	multiply_and_add(int _multiplier) : multiplier(_multiplier) {}
-
-	__host__ __device__
-		uint32_t operator()(uint32_t prev_sum, uint32_t current_value) const {
-		return prev_sum + multiplier * current_value;
+	__host__ __device__ uint32_t operator()(const uint32_t& a, const uint32_t& b) const {
+		return a + (b * multiplier);
 	}
 };
 
@@ -53,7 +51,7 @@ __global__ void calculateFrameBits(unsigned char* data,int length,uint32_t* fram
 }
 
 
-__global__ void fillOutput(unsigned char* data, int length, uint32_t* frameBits, uint32_t* output,int* framePositions) {
+__global__ void fillOutput(unsigned char* data, int length, uint32_t* frameBits, uint32_t* output,uint32_t* framePositions) {
 	int threadId = blockIdx.x * blockDim.x + threadIdx.x;
 	if (threadId >= length)
 		return;
@@ -85,7 +83,7 @@ __global__ void fillOutput(unsigned char* data, int length, uint32_t* frameBits,
 
 }
 
-int calculateOutputSize(const int* framePositions, int numFrames, std::vector<uint32_t> frameBits,uint64_t dataLength) {
+int calculateOutputSize(uint32_t* framePositions, int numFrames, std::vector<uint32_t> frameBits,uint64_t dataLength) {
 	int lastFrameStart = framePositions[numFrames - 1];
 	int lastFrameBitLength = frameBits[numFrames - 1];
 	int lastFrameDataCount = dataLength % FRAME_LENGTH == 0 ? FRAME_LENGTH : dataLength % FRAME_LENGTH;
@@ -123,15 +121,23 @@ __host__ FLData CudaFLEncode(std::vector<unsigned char> data) {
 	std::vector<uint32_t> host_frameBits(numFrames);
 	cudaMemcpy(host_frameBits.data(), dev_frameBits, sizeof(uint32_t) * numFrames, cudaMemcpyDeviceToHost);
 
-	int* dev_framePositions = NULL;
-	cudaMalloc((void**)&dev_framePositions, sizeof(int) * numFrames);
+	uint32_t* dev_framePositions = NULL;
+	cudaMalloc((void**)&dev_framePositions, sizeof(uint32_t) * numFrames);
 
+	uint32_t init = 0;
+	thrust::exclusive_scan(thrust::device, dev_frameBits, dev_frameBits + numFrames, dev_framePositions,init, multiply_and_add(FRAME_LENGTH));
 
-	thrust::exclusive_scan(thrust::device, dev_frameBits, dev_frameBits + numFrames, dev_framePositions, 0, multiply_and_add(FRAME_LENGTH));
-
-	int* framePositions = (int*)malloc(sizeof(int) * numFrames);
-	cudaMemcpy(framePositions, dev_framePositions, sizeof(int) * numFrames, cudaMemcpyDeviceToHost);
-
+	uint32_t* framePositions = (uint32_t*)malloc(sizeof(uint32_t) * numFrames);
+	//cudaMemcpy(framePositions, dev_framePositions, sizeof(uint32_t) * numFrames, cudaMemcpyDeviceToHost);
+	uint32_t sum = 0;
+	for (int i = 0; i < numFrames; i++) {
+		framePositions[i] = sum;
+		sum += host_frameBits[i] * FRAME_LENGTH;
+	}
+	for (int i = 0; i < numFrames; i++) {
+		std::cout << framePositions[i] << "\t";
+	}
+	cudaMemcpy(dev_framePositions, framePositions, sizeof(uint32_t) * numFrames, cudaMemcpyHostToDevice);
 	uint32_t* dev_output = NULL;
 	int outputLength = calculateOutputSize(framePositions, numFrames, host_frameBits, length);
 	cudaMalloc((void**)&dev_output, sizeof(uint32_t) * outputLength);
