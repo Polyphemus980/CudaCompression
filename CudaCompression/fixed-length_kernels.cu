@@ -68,7 +68,6 @@ __global__ void fillOutput(unsigned char* data, int length, uint32_t* frameBits,
 	int bitOffset = startPos % 32;
 
 	unsigned char symbol = data[threadId];
-
 	uint32_t maskedSymbol = (uint32_t)(symbol & ((1u << bitsPerSymbol) - 1));
 
 	uint32_t shiftedSymbol = maskedSymbol << bitOffset;
@@ -83,11 +82,11 @@ __global__ void fillOutput(unsigned char* data, int length, uint32_t* frameBits,
 
 }
 
-int calculateOutputSize(uint32_t* framePositions, int numFrames, std::vector<uint32_t> frameBits,uint64_t dataLength) {
-	int lastFrameStart = framePositions[numFrames - 1];
+uint64_t calculateOutputSize(uint32_t* framePositions, int numFrames, std::vector<uint32_t> frameBits,uint64_t dataLength) {
+	uint64_t lastFrameStart = framePositions[numFrames - 1];
 	int lastFrameBitLength = frameBits[numFrames - 1];
 	int lastFrameDataCount = dataLength % FRAME_LENGTH == 0 ? FRAME_LENGTH : dataLength % FRAME_LENGTH;
-	int lastBitPosition = lastFrameStart + lastFrameBitLength * lastFrameDataCount;
+	uint64_t lastBitPosition = lastFrameStart + lastFrameBitLength * lastFrameDataCount;
 	return (lastBitPosition + 31) / 32;
 }
 
@@ -128,18 +127,16 @@ __host__ FLData CudaFLEncode(std::vector<unsigned char> data) {
 	thrust::exclusive_scan(thrust::device, dev_frameBits, dev_frameBits + numFrames, dev_framePositions,init, multiply_and_add(FRAME_LENGTH));
 
 	uint32_t* framePositions = (uint32_t*)malloc(sizeof(uint32_t) * numFrames);
-	//cudaMemcpy(framePositions, dev_framePositions, sizeof(uint32_t) * numFrames, cudaMemcpyDeviceToHost);
-	uint32_t sum = 0;
+
+	uint64_t sum = 0;
 	for (int i = 0; i < numFrames; i++) {
 		framePositions[i] = sum;
 		sum += host_frameBits[i] * FRAME_LENGTH;
 	}
-	for (int i = 0; i < numFrames; i++) {
-		std::cout << framePositions[i] << "\t";
-	}
+	printf("%ul ", framePositions[numFrames - 2]);
 	cudaMemcpy(dev_framePositions, framePositions, sizeof(uint32_t) * numFrames, cudaMemcpyHostToDevice);
 	uint32_t* dev_output = NULL;
-	int outputLength = calculateOutputSize(framePositions, numFrames, host_frameBits, length);
+	uint64_t outputLength = calculateOutputSize(framePositions, numFrames, host_frameBits, length);
 	cudaMalloc((void**)&dev_output, sizeof(uint32_t) * outputLength);
 	cudaMemset(dev_output, 0, sizeof(uint32_t) * outputLength);
 
@@ -159,7 +156,7 @@ __host__ FLData CudaFLEncode(std::vector<unsigned char> data) {
 	return encodedData;
 }
 
-__global__ void Decode(uint32_t* encodedData, int encodedLength, unsigned char* frameBits, uint64_t decodedDataLength,unsigned char* decoded, uint32_t* framePositions)
+__global__ void Decode(uint32_t* encodedData, int encodedLength, unsigned char* frameBits, uint64_t decodedDataLength,unsigned char* decoded, uint64_t* framePositions)
 {
 	int threadId = blockIdx.x * blockDim.x + threadIdx.x;
 	if (threadId >= decodedDataLength)
@@ -170,7 +167,7 @@ __global__ void Decode(uint32_t* encodedData, int encodedLength, unsigned char* 
 	int bitsPerSymbol = frameBits[frameIndex];
 
 	int symbolIndex = threadIdx.x % FRAME_LENGTH;
-	int startPos = framePositions[frameIndex] + symbolIndex * bitsPerSymbol;
+	uint64_t startPos = framePositions[frameIndex] + symbolIndex * bitsPerSymbol;
 	int outputIndex = startPos / 32;
 
 	int bitOffset = startPos % 32;
@@ -203,12 +200,12 @@ __host__ std::vector<unsigned char> CudaFLDecode(FLData decodingData) {
 	cudaMalloc((void**)&dev_frameBits, sizeof(unsigned char) * frameBitsLength);
 	cudaMemcpy(dev_frameBits,decodingData.frameBits.data(), sizeof(unsigned char) * frameBitsLength, cudaMemcpyHostToDevice);
 
-	uint32_t* dev_framePositions = NULL;
-	cudaMalloc((void**)&dev_framePositions, sizeof(int) * frameBitsLength);
+	uint64_t* dev_framePositions = NULL;
+	cudaMalloc((void**)&dev_framePositions, sizeof(uint64_t) * frameBitsLength);
 
-	uint32_t* framePositions = (uint32_t*)malloc(sizeof(uint32_t) * frameBitsLength);
-	int sum = 0;
-	for (int i = 0; i < frameBitsLength; i++) {
+	uint64_t* framePositions = (uint64_t*)malloc(sizeof(uint64_t) * frameBitsLength);
+	uint64_t sum = 0;
+	for (uint64_t i = 0; i < frameBitsLength; i++) {
 		framePositions[i] = sum;
 		sum += decodingData.frameBits[i] * FRAME_LENGTH;
 	}

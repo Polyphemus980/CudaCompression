@@ -16,6 +16,8 @@
 
 ipch/
 *.ipch
-
+*.txt
+*.png
+*.jpg
 x64/
 .vs/
