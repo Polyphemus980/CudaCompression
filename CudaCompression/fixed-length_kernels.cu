@@ -9,7 +9,7 @@ struct multiply_and_add {
 	uint32_t multiplier;
 	multiply_and_add(uint32_t multiplier) : multiplier(multiplier) {}
 
-	__host__ __device__ uint32_t operator()(const uint32_t& a, const uint32_t& b) const {
+	__device__ uint32_t operator()(const uint32_t& a, const uint32_t& b) const {
 		return a + (b * multiplier);
 	}
 };
@@ -62,7 +62,7 @@ __global__ void calculateFrameBits(unsigned char* data,uint32_t length,uint64_t*
 
 
 __global__ void fillOutput(unsigned char* data, uint64_t length, uint64_t* frameBits, uint32_t* output,uint64_t* framePositions) {
-	int threadId = blockIdx.x * blockDim.x + threadIdx.x;
+	uint32_t threadId = blockIdx.x * blockDim.x + threadIdx.x;
 	if (threadId >= length)
 		return;
 
@@ -79,6 +79,7 @@ __global__ void fillOutput(unsigned char* data, uint64_t length, uint64_t* frame
 
 	unsigned char symbol = data[threadId];
 	uint32_t maskedSymbol = (uint32_t)(symbol & ((1u << bitsPerSymbol) - 1));
+
 
 	uint32_t shiftedSymbol = maskedSymbol << bitOffset;
 
@@ -112,6 +113,12 @@ std::vector<unsigned char> convertToUnsignedChar(std::vector<uint64_t>& input) {
 	return output;
 }
 
+__global__ void multiply(uint64_t* framePositions,uint32_t length, int multiplier) {
+	uint32_t threadId = blockIdx.x * blockDim.x + threadIdx.x;
+	if (threadId >= length)
+		return;
+	framePositions[threadId] *= multiplier;
+}
 __host__ FLData CudaFLEncode(std::vector<unsigned char> data) {
 	unsigned char* dev_data = NULL;
 	uint64_t* dev_frameBits = NULL;
@@ -136,22 +143,16 @@ __host__ FLData CudaFLEncode(std::vector<unsigned char> data) {
 
 		gpuErrchk(cudaMalloc((void**)&dev_framePositions, sizeof(uint64_t) * numFrames));
 
-		uint32_t init = 0;
-		thrust::exclusive_scan(thrust::device, dev_frameBits, dev_frameBits + numFrames, dev_framePositions, init, multiply_and_add(FRAME_LENGTH));
-
+		thrust::exclusive_scan(thrust::device, dev_frameBits, dev_frameBits + numFrames, dev_framePositions);
+		
+		int numMultiplyBlocks = (numFrames + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+		multiply << <numMultiplyBlocks, THREADS_PER_BLOCK >> > (dev_framePositions, numFrames,FRAME_LENGTH);
 		framePositions = (uint64_t*)malloc(sizeof(uint64_t) * numFrames);
 		if (!framePositions) {
 			throw std::runtime_error("Failed to allocate host memory for frame positions.");
 		}
 
-		uint64_t sum = 0;
-		for (int i = 0; i < numFrames; i++) {
-			framePositions[i] = sum;
-			printf("%u ", framePositions[i]);
-			sum += host_frameBits[i] * FRAME_LENGTH;
-		}
-
-		gpuErrchk(cudaMemcpy(dev_framePositions, framePositions, sizeof(uint64_t) * numFrames, cudaMemcpyHostToDevice));
+		gpuErrchk(cudaMemcpy(framePositions, dev_framePositions, sizeof(uint64_t) * numFrames, cudaMemcpyDeviceToHost));
 
 		uint64_t outputLength = calculateOutputSize(framePositions, numFrames, host_frameBits, length);
 		gpuErrchk(cudaMalloc((void**)&dev_output, sizeof(uint32_t) * outputLength));
@@ -240,18 +241,11 @@ __host__ std::vector<unsigned char> CudaFLDecode(FLData decodingData) {
 		gpuErrchk(cudaMemcpy(dev_frameBits, decodingData.frameBits.data(), sizeof(unsigned char) * frameBitsLength, cudaMemcpyHostToDevice));
 
 		gpuErrchk(cudaMalloc((void**)&dev_framePositions, sizeof(uint64_t) * frameBitsLength));
-		framePositions = (uint64_t*)malloc(sizeof(uint64_t) * frameBitsLength);
-		if (!framePositions) {
-			throw std::runtime_error("Failed to allocate host memory for frame positions.");
-		}
 
-		uint64_t sum = 0;
-		for (uint64_t i = 0; i < frameBitsLength; i++) {
-			framePositions[i] = sum;
-			sum += decodingData.frameBits[i] * FRAME_LENGTH;
-		}
+		thrust::exclusive_scan(thrust::device, dev_frameBits, dev_frameBits + frameBitsLength, dev_framePositions,(uint32_t)0);
 
-		gpuErrchk(cudaMemcpy(dev_framePositions, framePositions, sizeof(uint64_t) * frameBitsLength, cudaMemcpyHostToDevice));
+		int numMultiplyBlocks = (frameBitsLength + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+		multiply << <numMultiplyBlocks, THREADS_PER_BLOCK >> > (dev_framePositions, frameBitsLength, FRAME_LENGTH);
 
 		gpuErrchk(cudaMalloc((void**)&dev_decoded, sizeof(unsigned char) * decodedDataLength));
 		gpuErrchk(cudaMemset(dev_decoded, 0, sizeof(unsigned char) * decodedDataLength));
