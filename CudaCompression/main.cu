@@ -63,6 +63,7 @@ CompressArguments readArguments(int argc, char** argv) {
 }
 
 FLData readFLCompressedFile(std::string filePath) {
+    auto start = std::chrono::high_resolution_clock::now();
     FILE* file = fopen(filePath.c_str(), "rb");
     if (!file) {
         std::cerr << "Failed to open file: " << filePath << std::endl;
@@ -104,10 +105,14 @@ FLData readFLCompressedFile(std::string filePath) {
     }
 
     fclose(file);
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cout << "Reading data from file: " << duration.count() << " ms" << std::endl;
     return compressedData;
 }
 
 bool writeFLCompressedFile(std::string filePath, FLData compressedData) {
+    auto start = std::chrono::high_resolution_clock::now();
     FILE* file = fopen(filePath.c_str(), "wb");
     if (!file) {
         std::cerr << "Failed to open file: " << filePath << std::endl;
@@ -145,9 +150,13 @@ bool writeFLCompressedFile(std::string filePath, FLData compressedData) {
     }
 
     fclose(file);
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cout << "Writing results to file: " << duration.count() << " ms" << std::endl;
     return true;
 }
 RLData readRLCompressedFile(std::string filePath) {
+    auto start = std::chrono::high_resolution_clock::now();
     FILE* file = fopen(filePath.c_str(), "rb");
     if (!file) {
         std::cerr << "Failed to open file: " << filePath << std::endl;
@@ -187,11 +196,14 @@ RLData readRLCompressedFile(std::string filePath) {
     }
 
     fclose(file);
-
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cout << "Reading data from file: " << duration.count() << " ms" << std::endl;
     return compressionData;
 }
 
 bool writeRLCompressedFile(std::string filePath, RLData compressedData) {
+    auto start = std::chrono::high_resolution_clock::now();
     FILE* file = fopen(filePath.c_str(), "wb");
     if (!file) {
         std::cerr << "Failed to open file: " << filePath << std::endl;
@@ -223,10 +235,15 @@ bool writeRLCompressedFile(std::string filePath, RLData compressedData) {
     }
 
     fclose(file);
+
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cout << "Writing results to file: " << duration.count() << " ms" << std::endl;
     return true;
 }
 
 bool writeDecompressedFile(const std::string filePath, const std::vector<unsigned char> data) {
+    auto start = std::chrono::high_resolution_clock::now();
     FILE* file = fopen(filePath.c_str(), "wb");
     if (!file) {
         std::cerr << "Failed to open file for writing: " << filePath << std::endl;
@@ -241,10 +258,14 @@ bool writeDecompressedFile(const std::string filePath, const std::vector<unsigne
     }
 
     fclose(file);
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cout << "Writing results to file: " << duration.count() << " ms" << std::endl;
     return true;
 }
 
 std::vector<unsigned char> readUncompressedFile(std::string filePath) {
+    auto start = std::chrono::high_resolution_clock::now();
     FILE* file = fopen(filePath.c_str(), "rb");
     if (!file) {
         std::cerr << "Failed to open file: " << filePath << std::endl;
@@ -277,6 +298,9 @@ std::vector<unsigned char> readUncompressedFile(std::string filePath) {
         return {};
     }
     fclose(file);
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cout << "Reading data from file: " << duration.count() << " ms" << std::endl;
     return data;
 }
 

@@ -98,13 +98,16 @@ __host__ RLData CudaRLEncode(std::vector<unsigned char> data) {
 	unsigned char* outputCounts = NULL;
 	int* host_compacted_length = NULL;
 
-	auto start = std::chrono::high_resolution_clock::now();
 	try {
+		auto totalStart = std::chrono::high_resolution_clock::now();
 		size_t length = data.size();
-
+		auto start = std::chrono::high_resolution_clock::now();
 		gpuErrchk(cudaMalloc((void**)&dev_data, sizeof(char) * length));
 		gpuErrchk(cudaMemcpy(dev_data, data.data(), sizeof(char) * length, cudaMemcpyHostToDevice));
-
+		auto end = std::chrono::high_resolution_clock::now();
+		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+		std::cout << "GPU Run length encoding - Copying data to GPU: " << duration.count() << " ms" << std::endl;
+		start = std::chrono::high_resolution_clock::now();
 		gpuErrchk(cudaMalloc((void**)&mask, sizeof(uint32_t) * length));
 		int threadsPerBlock = 512;
 		int numBlocksMasks = (length + threadsPerBlock - 1) / threadsPerBlock;
@@ -134,7 +137,10 @@ __host__ RLData CudaRLEncode(std::vector<unsigned char> data) {
 		gpuErrchk(cudaMalloc((void**)&outputCounts, sizeof(unsigned char) * outputLength));
 
 		finalEncoding << <numBlocksChunks, threadsPerBlock >> > (compacted_mask, positions, compacted_length, dev_data, outputBytes, outputCounts);
-
+		end = std::chrono::high_resolution_clock::now();
+		duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+		std::cout << "GPU Run length encoding - Compression: " << duration.count() << " ms" << std::endl;
+		start = std::chrono::high_resolution_clock::now();
 		std::vector<unsigned char> hostOutputBytes(outputLength);
 		gpuErrchk(cudaMemcpy(hostOutputBytes.data(), outputBytes, sizeof(unsigned char) * outputLength, cudaMemcpyDeviceToHost));
 
@@ -142,9 +148,9 @@ __host__ RLData CudaRLEncode(std::vector<unsigned char> data) {
 		std::vector<unsigned char> hostOutputCounts(outputLength);
 		gpuErrchk(cudaMemcpy(hostOutputCounts.data(), outputCounts, sizeof(unsigned char) * outputLength, cudaMemcpyDeviceToHost));
 
-		auto end = std::chrono::high_resolution_clock::now();
-		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-		std::cout << "GPU Total time: " << duration.count() << " ms" << std::endl;
+		end = std::chrono::high_resolution_clock::now();
+		duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+		std::cout << "GPU Run length encoding - Copying data back to CPU: " << duration.count() << " ms" << std::endl;
 		RLData encodedData;
 		encodedData.counts = hostOutputCounts;
 		encodedData.values = hostOutputBytes;
@@ -162,6 +168,9 @@ __host__ RLData CudaRLEncode(std::vector<unsigned char> data) {
 		gpuErrchk(cudaFree(outputBytes));
 		gpuErrchk(cudaFree(outputCounts));
 
+		auto totalEnd = std::chrono::high_resolution_clock::now();
+		auto totalDuration = std::chrono::duration_cast<std::chrono::milliseconds>(totalEnd - totalStart);
+		std::cout << "GPU Run Length encoding - Total time: " << totalDuration.count() << " ms" << std::endl;
 		return encodedData;
 	}
 	catch (const std::runtime_error& e)
@@ -219,52 +228,69 @@ std::vector<uint32_t> convertToUInt32_t(std::vector<unsigned char>& input) {
 }
 
 __host__ std::vector<unsigned char> CudaRLDecode(RLData decodingData)
-{	
+{
 	cudaFree(0);
+
 	unsigned char* dev_encodedValues = NULL;
 	uint32_t* dev_encodedCounts = NULL;
 	uint32_t* positions = NULL;
 	unsigned char* dev_decoded = NULL;
 
-	auto start = std::chrono::high_resolution_clock::now();
 	try
 	{
+		auto totalStart = std::chrono::high_resolution_clock::now();
+
+		auto start = std::chrono::high_resolution_clock::now();
 		std::vector<uint32_t> convertedCounts = convertToUInt32_t(decodingData.counts);
 		uint64_t encodedLength = decodingData.tablesLength;
+
 		gpuErrchk(cudaMalloc((void**)&dev_encodedValues, sizeof(char) * encodedLength));
 		gpuErrchk(cudaMemcpy(dev_encodedValues, decodingData.values.data(), sizeof(char) * encodedLength, cudaMemcpyHostToDevice));
 
 		gpuErrchk(cudaMalloc((void**)&dev_encodedCounts, sizeof(uint32_t) * encodedLength));
 		gpuErrchk(cudaMemcpy(dev_encodedCounts, convertedCounts.data(), sizeof(uint32_t) * encodedLength, cudaMemcpyHostToDevice));
+		auto end = std::chrono::high_resolution_clock::now();
+		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+		std::cout << "GPU Run Length decoding - Copying data to GPU: " << duration.count() << " ms" << std::endl;
 
+		start = std::chrono::high_resolution_clock::now();
 		gpuErrchk(cudaMalloc((void**)&positions, sizeof(uint32_t) * encodedLength));
 		calculatePosition(dev_encodedCounts, positions, encodedLength);
 		gpuErrchk(cudaDeviceSynchronize());
+
 		gpuErrchk(cudaMalloc((void**)&dev_decoded, sizeof(char) * decodingData.decodedDataLength));
 
 		int threadsPerBlock = 512;
 		int numBlocks = (decodingData.decodedDataLength + threadsPerBlock - 1) / threadsPerBlock;
-
 		finalDecoding << <numBlocks, threadsPerBlock >> > (dev_encodedValues, positions, encodedLength, dev_decoded, decodingData.decodedDataLength);
-		gpuErrchk(cudaGetLastError()); 
+		gpuErrchk(cudaGetLastError());
+		gpuErrchk(cudaDeviceSynchronize());
+		end = std::chrono::high_resolution_clock::now();
+		duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+		std::cout << "GPU Run Length decoding - Decompression: " << duration.count() << " ms" << std::endl;
 
+
+		start = std::chrono::high_resolution_clock::now();
 		std::vector<unsigned char> decoded(decodingData.decodedDataLength);
 		gpuErrchk(cudaMemcpy(decoded.data(), dev_decoded, sizeof(char) * decodingData.decodedDataLength, cudaMemcpyDeviceToHost));
+		end = std::chrono::high_resolution_clock::now();
+		duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+		std::cout << "GPU Run Length decoding - Copying data back to CPU: " << duration.count() << " ms" << std::endl;
 
 		gpuErrchk(cudaFree(dev_encodedValues));
 		gpuErrchk(cudaFree(dev_encodedCounts));
 		gpuErrchk(cudaFree(positions));
 		gpuErrchk(cudaFree(dev_decoded));
 
-		auto end = std::chrono::high_resolution_clock::now();
-		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-		std::cout << "GPU Total time: " << duration.count() << " ms" << std::endl;
+		auto totalEnd = std::chrono::high_resolution_clock::now();
+		auto totalDuration = std::chrono::duration_cast<std::chrono::milliseconds>(totalEnd - totalStart);
+		std::cout << "GPU Run Length decoding - Total time: " << totalDuration.count() << " ms" << std::endl;
 
 		return decoded;
 	}
 	catch (const std::runtime_error& e)
 	{
-		std::cerr << e.what() << std::endl;
+		std::cerr << "Error: " << e.what() << std::endl;
 
 		if (dev_encodedValues) gpuErrchk(cudaFree(dev_encodedValues));
 		if (dev_encodedCounts) gpuErrchk(cudaFree(dev_encodedCounts));
