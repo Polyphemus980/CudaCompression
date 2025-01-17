@@ -110,7 +110,6 @@ __host__ RLData CudaRLEncode(std::vector<unsigned char> data) {
 		int numBlocksMasks = (length + threadsPerBlock - 1) / threadsPerBlock;
 		createMask << <numBlocksMasks, threadsPerBlock >> > (dev_data, mask, length);
 
-
 		gpuErrchk(cudaMalloc((void**)&scanned_mask, sizeof(uint32_t) * length));
 		scanMask(mask, scanned_mask, length);
 
@@ -146,7 +145,6 @@ __host__ RLData CudaRLEncode(std::vector<unsigned char> data) {
 		auto end = std::chrono::high_resolution_clock::now();
 		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 		std::cout << "GPU Total time: " << duration.count() << " ms" << std::endl;
-
 		RLData encodedData;
 		encodedData.counts = hostOutputCounts;
 		encodedData.values = hostOutputBytes;
