@@ -71,6 +71,8 @@ __global__ void fillOutput(unsigned char* data, uint64_t length, uint64_t* frame
 	uint32_t bitsPerSymbol = frameBits[frameIndex];
 
 	int symbolIndex = threadId % FRAME_LENGTH;
+
+	//pozycja w bitach od pocz¹tku zakodowanej tablicy, na której zapisujemy wartoœæ
 	uint64_t startPos = framePositions[frameIndex] + symbolIndex * bitsPerSymbol;
 
 	int outputIndex = startPos / 32;
@@ -80,14 +82,16 @@ __global__ void fillOutput(unsigned char* data, uint64_t length, uint64_t* frame
 	unsigned char symbol = data[threadId];
 	uint32_t maskedSymbol = (uint32_t)(symbol & ((1u << bitsPerSymbol) - 1));
 
-
+	//przesuwamy bity symbolu na obliczon¹ pozycjê
 	uint32_t shiftedSymbol = maskedSymbol << bitOffset;
-
 	atomicOr(&output[outputIndex], shiftedSymbol);
 
+	//jezeli czêœæ bitów nie zmieœci³a siê w jednym elemencie
 	if (bitOffset + bitsPerSymbol > 32) {
-		uint32_t spillBits = bitOffset + bitsPerSymbol - 32;
-		uint32_t spillMask = maskedSymbol >> (bitsPerSymbol - spillBits);
+		//ile bitów przesz³o na nastêpny element
+		uint32_t spilledBits = bitOffset + bitsPerSymbol - 32;
+		//przesuwamy bity tak, aby pozosta³y tylko te, które nie zmieœci³y siê w poprzednim elemencie
+		uint32_t spillMask = maskedSymbol >> (bitsPerSymbol - spilledBits);
 		atomicOr(&output[outputIndex + 1], spillMask);
 	}
 
@@ -120,13 +124,15 @@ __global__ void multiply(uint64_t* framePositions,uint32_t length, int multiplie
 	framePositions[threadId] *= multiplier;
 }
 __host__ FLData CudaFLEncode(std::vector<unsigned char> data) {
+	cudaFree(0);
 	unsigned char* dev_data = NULL;
 	uint64_t* dev_frameBits = NULL;
 	uint64_t* dev_framePositions = NULL;
 	uint32_t* dev_output = NULL;
 	uint64_t length = data.size();
 	uint64_t* framePositions = NULL;
-
+	
+	auto start = std::chrono::high_resolution_clock::now();
 	try {
 		gpuErrchk(cudaMalloc((void**)&dev_data, sizeof(char) * length));
 		gpuErrchk(cudaMemcpy(dev_data, data.data(), sizeof(char) * length, cudaMemcpyHostToDevice));
@@ -163,7 +169,9 @@ __host__ FLData CudaFLEncode(std::vector<unsigned char> data) {
 
 		std::vector<uint32_t> output(outputLength);
 		gpuErrchk(cudaMemcpy(output.data(), dev_output, sizeof(uint32_t) * outputLength, cudaMemcpyDeviceToHost));
-
+		auto end = std::chrono::high_resolution_clock::now();
+		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+		std::cout << "Fixed length encoding GPU total time: " << duration.count() << " ms" << std::endl;
 		FLData encodedData;
 		encodedData.encodedValues = output;
 		encodedData.frameBits = convertToUnsignedChar(host_frameBits);
@@ -210,25 +218,31 @@ __global__ void Decode(uint32_t* encodedData, int encodedLength, unsigned char* 
 
 	unsigned char data = (encodedData[outputIndex] >> bitOffset);
 
+	//jezeli wartoœæ przekracza na nastêpny element w encodedData 
 	if (bitOffset + bitsPerSymbol > 32)
 	{
+		//ile bitów przesz³o na nastêpny element
 		int spilledBits = bitOffset + bitsPerSymbol - 32;
+		// bierzemy bity które przesz³y i przesuwamy je na miejsce po bitach, które nie przesz³y 
 		unsigned char spilledData = (encodedData[outputIndex + 1] & ((1u << spilledBits) - 1)) << (32 - bitOffset);
 		data |= spilledData;
 	}
-
+	
+	//bierzemy tylko bitsPerSymbol bitów
 	data &= ((1u << bitsPerSymbol) - 1);
 	decoded[threadId] = data;
 
 }
 
 __host__ std::vector<unsigned char> CudaFLDecode(FLData decodingData) {
+	cudaFree(0);
 	uint32_t* dev_encodedData = NULL;
 	unsigned char* dev_frameBits = NULL;
 	uint64_t* dev_framePositions = NULL;
 	unsigned char* dev_decoded = NULL;
 	uint64_t* framePositions = NULL;
 
+	auto start = std::chrono::high_resolution_clock::now();
 	try {
 		uint64_t encodedLength = decodingData.valuesLength;
 		uint64_t frameBitsLength = decodingData.bitsLength;
@@ -257,7 +271,9 @@ __host__ std::vector<unsigned char> CudaFLDecode(FLData decodingData) {
 
 		std::vector<unsigned char> host_decoded(decodedDataLength);
 		gpuErrchk(cudaMemcpy(host_decoded.data(), dev_decoded, sizeof(unsigned char) * decodedDataLength, cudaMemcpyDeviceToHost));
-
+		auto end = std::chrono::high_resolution_clock::now();
+		auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+		std::cout << "Fixed length decoding GPU total time: " << duration.count() << " ms" << std::endl;
 		free(framePositions);
 		gpuErrchk(cudaFree(dev_encodedData));
 		gpuErrchk(cudaFree(dev_frameBits));
